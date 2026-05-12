@@ -1,0 +1,8 @@
+# Core: tested with these versions on CPU.
+torch>=2.4
+numpy>=1.26
+matplotlib>=3.8
+
+# RL env. The [atari] extra pulls ale-py + AutoROM.
+gymnasium[atari]>=1.0
+autorom[accept-rom-license]>=0.6
