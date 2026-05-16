@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node (not part of this project)
+node_modules/
+package.json
+package-lock.json
+
+# Large training artifacts — regenerate by running train_atari.py
+runs/*/model.pt
+runs/*/log.npz
+runs/*/train.log
+runs/*/pid
+runs/.matplotlib/
+
+# In-progress DDQN runs — commit when complete
+runs/asterix_ddqn_*/

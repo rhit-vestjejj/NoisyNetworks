@@ -6,3 +6,4 @@ matplotlib>=3.8
 # RL env. The [atari] extra pulls ale-py + AutoROM.
 gymnasium[atari]>=1.0
 autorom[accept-rom-license]>=0.6
+opencv-python-headless>=4.8

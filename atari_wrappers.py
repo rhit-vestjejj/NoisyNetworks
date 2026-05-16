@@ -21,6 +21,13 @@ Requires: pip install "gymnasium[atari,accept-rom-license]" ale-py
 import gymnasium as gym
 import numpy as np
 
+try:
+    import ale_py
+except ImportError:
+    ale_py = None
+else:
+    gym.register_envs(ale_py)
+
 
 class EpisodicLifeEnv(gym.Wrapper):
     """End the episode when a life is lost (better learning signal).

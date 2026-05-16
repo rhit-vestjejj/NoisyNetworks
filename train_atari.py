@@ -84,6 +84,24 @@ def epsilon(step, args):
     return args.eps_start + (args.eps_end - args.eps_start) * frac
 
 
+def _nstep_push(replay, buf, gamma):
+    """Compute discounted n-step return and push to replay.
+
+    If a terminal occurs mid-window the return is truncated there and no
+    bootstrap is needed (done=1 ensures that in the TD target).
+    """
+    G = 0.0
+    last = len(buf) - 1
+    for i, (_, _, r, _, done) in enumerate(buf):
+        G += gamma ** i * r
+        if done:
+            last = i
+            break
+    s0, a0 = buf[0][0], buf[0][1]
+    sn, dn = buf[last][3], buf[last][4]
+    replay.push(s0, a0, G, sn, dn)
+
+
 def train(args):
     os.makedirs(args.out_dir, exist_ok=True)
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
@@ -105,6 +123,7 @@ def train(args):
     obs, _ = env.reset(seed=args.seed)
     obs = np.asarray(obs)
     ep_reward = 0.0
+    nstep_buf = deque()
     t0 = time.time()
 
     for step in range(1, args.total_steps + 1):
@@ -126,11 +145,19 @@ def train(args):
         next_obs, reward, terminated, truncated, _ = env.step(action)
         next_obs = np.asarray(next_obs)
         done = terminated or truncated
-        buffer.push(obs, action, reward, next_obs, float(terminated))
+
+        nstep_buf.append((obs, action, reward, next_obs, float(terminated)))
+        if len(nstep_buf) == args.nstep:
+            _nstep_push(buffer, nstep_buf, args.gamma)
+            nstep_buf.popleft()
+
         obs = next_obs
         ep_reward += reward
 
         if done:
+            while nstep_buf:
+                _nstep_push(buffer, nstep_buf, args.gamma)
+                nstep_buf.popleft()
             episode_rewards.append(ep_reward)
             obs, _ = env.reset()
             obs = np.asarray(obs)
@@ -141,17 +168,16 @@ def train(args):
             s, a, r, s_next, term = buffer.sample(args.batch_size, device)
 
             with torch.no_grad():
-                if args.algo == "dueling":
-                    # Double-DQN. Action selection from online net (xi'' noise).
+                if args.algo == "dueling" or args.double:
+                    # Double-DQN: online selects action, target evaluates it.
                     online.reset_noise()
                     b_star = online(s_next).argmax(dim=1, keepdim=True)
-                    # Target evaluation from target net (xi' noise).
                     target.reset_noise()
                     q_next = target(s_next).gather(1, b_star).squeeze(1)
                 else:
                     target.reset_noise()
                     q_next = target(s_next).max(dim=1).values
-                y = r + args.gamma * (1.0 - term) * q_next
+                y = r + (args.gamma ** args.nstep) * (1.0 - term) * q_next
 
             # Online sample for gradient (xi noise). Must be the last reset_noise.
             online.reset_noise()
@@ -182,6 +208,7 @@ def train(args):
         if step % args.save_every == 0:
             torch.save(online.state_dict(), os.path.join(args.out_dir, "model.pt"))
             np.savez(os.path.join(args.out_dir, "log.npz"), **log)
+            plot(args.out_dir, log, args.algo, args.noisy)
 
     env.close()
     np.savez(os.path.join(args.out_dir, "log.npz"), **log)
@@ -220,6 +247,10 @@ def parse():
     p.add_argument("--algo", choices=["dqn", "dueling"], default="dqn")
     p.add_argument("--noisy", dest="noisy", action="store_true", default=True)
     p.add_argument("--no-noisy", dest="noisy", action="store_false")
+    p.add_argument("--nstep", type=int, default=1,
+                   help="n-step return horizon (1 = standard 1-step TD)")
+    p.add_argument("--double", action="store_true", default=False,
+                   help="use double-DQN target for the dqn algo")
     p.add_argument("--total-steps", type=int, default=50_000_000)
     p.add_argument("--buffer-capacity", type=int, default=1_000_000)
     p.add_argument("--batch-size", type=int, default=32)
