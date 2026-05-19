@@ -329,3 +329,4 @@ step  3110000 | reward(last100)   18.24 | eps 0.010 | elapsed 13594.5s
 step  3120000 | reward(last100)   18.37 | eps 0.010 | elapsed 13649.8s
 step  3130000 | reward(last100)   19.06 | eps 0.010 | elapsed 13700.4s
 step  3140000 | reward(last100)   20.51 | eps 0.010 | elapsed 13751.4s
+step  3150000 | reward(last100)   20.88 | eps 0.010 | elapsed 13798.9s

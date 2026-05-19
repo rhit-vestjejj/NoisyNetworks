@@ -260,3 +260,4 @@ step  2430000 | reward(last100)   20.54 | sigma 0.0088 | elapsed 13339.9s
 step  2440000 | reward(last100)   20.56 | sigma 0.0088 | elapsed 13403.9s
 step  2450000 | reward(last100)   20.39 | sigma 0.0089 | elapsed 13467.9s
 step  2460000 | reward(last100)   20.48 | sigma 0.0088 | elapsed 13527.2s
+step  2470000 | reward(last100)   20.48 | sigma 0.0088 | elapsed 13585.5s
