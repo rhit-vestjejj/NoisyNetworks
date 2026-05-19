@@ -12,6 +12,7 @@ Three training variants on **ALE/Asterix-v5** — the game where NoisyNet shows 
 |---|---|---|
 | DQN | `train_atari.py --algo dqn` | `+ --no-noisy` |
 | Double DQN | `train_atari.py --algo dqn --double` | `+ --no-noisy --double` |
+| DQN + PER | `train_atari.py --algo dqn --per` | `+ --no-noisy --per` |
 
 When `--no-noisy` is set, DQN/DDQN use **ε-greedy** with linear decay (Mnih 2015).
 
@@ -19,9 +20,10 @@ When `--no-noisy` is set, DQN/DDQN use **ε-greedy** with linear decay (Mnih 201
 |---|---|---|
 | `NoisyLinear` layer (factorised + independent noise) | `noisy_linear.py` | Eq. 8–11, §3.2 init |
 | Q-net heads: MLP, Atari conv, Dueling MLP, Dueling Atari | `model.py` | §3.1, Eq. 3 |
-| Replay buffer | `replay_buffer.py` | Eq. 14 |
+| Uniform replay buffer | `replay_buffer.py` | Eq. 14 |
+| Prioritized replay buffer (sum-tree) | `per_buffer.py` | Schaul et al. 2016 §3.3 |
 | Atari preprocessing (DQN-Nature wrappers) | `atari_wrappers.py` | |
-| DQN / DDQN training loop | `train_atari.py` | App. C.1 |
+| DQN / DDQN / PER training loop | `train_atari.py` | App. C.1 |
 
 ## Setup
 
@@ -54,6 +56,12 @@ Or run any single variant directly:
 
 # Vanilla DDQN
 .venv/bin/python train_atari.py --env-id ALE/Asterix-v5 --no-noisy --double --out-dir runs/asterix_ddqn_baseline
+
+# NoisyNet-DQN + PER
+.venv/bin/python train_atari.py --env-id ALE/Asterix-v5 --per --out-dir runs/asterix_per_noisy
+
+# Vanilla DQN + PER
+.venv/bin/python train_atari.py --env-id ALE/Asterix-v5 --no-noisy --per --out-dir runs/asterix_per_baseline
 ```
 
 ## Generating plots
@@ -74,8 +82,11 @@ Produces 7 plots in `runs/plots/`:
 | `ddqn_baseline.png` | Vanilla DDQN learning curve |
 | `ddqn_noisy.png` | NoisyNet-DDQN learning curve |
 | `ddqn_comparison.png` | Both DDQN variants on the same axes |
-| `summary_noisy.png` | NoisyNet-DQN vs NoisyNet-DDQN |
-| `summary_baseline.png` | Vanilla DQN vs Vanilla DDQN |
+| `per_baseline.png` | Vanilla DQN+PER learning curve |
+| `per_noisy.png` | NoisyNet-DQN+PER learning curve |
+| `per_comparison.png` | Both DQN+PER variants on the same axes |
+| `summary_noisy.png` | NoisyNet-DQN vs NoisyNet-DDQN vs NoisyNet-DQN+PER |
+| `summary_baseline.png` | Vanilla DQN vs Vanilla DDQN vs Vanilla DQN+PER |
 
 ## Common knobs
 
@@ -84,6 +95,9 @@ Produces 7 plots in `runs/plots/`:
 | `--algo` | `dqn` or `dueling` | `dqn` |
 | `--noisy` / `--no-noisy` | NoisyNet vs ε-greedy | `--noisy` |
 | `--double` | Double DQN target (online selects, target evaluates) | off |
+| `--per` | Prioritized Experience Replay (Schaul et al. 2016) | off |
+| `--per-alpha` | PER priority exponent α (0=uniform, 1=full priority) | `0.6` |
+| `--per-beta` | PER IS weight exponent β start (anneals to 1.0) | `0.4` |
 | `--env-id` | Any ALE environment | `ALE/Breakout-v5` |
 | `--total-steps` | Agent steps (×4 = frame count) | `50_000_000` |
 | `--seed` | RNG seed | `0` |
@@ -108,6 +122,7 @@ Exploration matters heavily in Asterix — the agent must learn to collect speci
 - **ε-greedy removed** in NoisyNet mode (§3.1).
 - **Independent noise samples** for online vs target nets per replay step (§3.1).
 - **Double DQN target:** online net selects action `b* = argmax_a Q_online(s', a)`, target net evaluates `Q_target(s', b*)` — reduces Q-value overestimation (Van Hasselt et al. 2016).
+- **Prioritized Experience Replay:** proportional prioritization `p_i = (|δ_i| + ε)^α`; IS weights `w_i = (N·P(i))^{-β}` correct for sampling bias; β anneals from 0.4 → 1.0 over full training (Schaul et al. 2016 §3.3).
 - **Init:** `μ ~ U[-1/√p, 1/√p]`, `σ = σ₀/√p` with σ₀=0.5. §3.2.
 - **Logged per layer:** `Σ̄ = mean(|σ_w|)` (Eq. 20) — the paper's Fig. 3 quantity.
 

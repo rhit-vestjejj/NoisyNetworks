@@ -31,6 +31,7 @@ import torch.nn.functional as F
 
 from atari_wrappers import make_atari
 from model import NoisyDQNAtari, NoisyDuelingAtari, iter_sigma
+from per_buffer import PrioritizedFrameReplay
 
 
 class FrameReplay:
@@ -115,7 +116,11 @@ def train(args):
     target = build_net(args.algo, n_actions, args.noisy).to(device)
     target.load_state_dict(online.state_dict())
     optim = torch.optim.Adam(online.parameters(), lr=args.lr, eps=1.5e-4)
-    buffer = FrameReplay(args.buffer_capacity, obs_shape)
+    if args.per:
+        buffer = PrioritizedFrameReplay(args.buffer_capacity, obs_shape,
+                                        alpha=args.per_alpha)
+    else:
+        buffer = FrameReplay(args.buffer_capacity, obs_shape)
 
     episode_rewards = deque(maxlen=100)
     log = {"step": [], "mean_reward": [], "sigma": [], "epsilon": []}
@@ -165,7 +170,11 @@ def train(args):
 
         # ---------- learn ----------
         if len(buffer) >= args.learning_starts and step % args.train_freq == 0:
-            s, a, r, s_next, term = buffer.sample(args.batch_size, device)
+            if args.per:
+                beta = min(1.0, args.per_beta + step * (1.0 - args.per_beta) / args.total_steps)
+                tree_idx, weights, s, a, r, s_next, term = buffer.sample(args.batch_size, device, beta)
+            else:
+                s, a, r, s_next, term = buffer.sample(args.batch_size, device)
 
             with torch.no_grad():
                 if args.algo == "dueling" or args.double:
@@ -182,7 +191,14 @@ def train(args):
             # Online sample for gradient (xi noise). Must be the last reset_noise.
             online.reset_noise()
             q_pred = online(s).gather(1, a.unsqueeze(1)).squeeze(1)
-            loss = F.smooth_l1_loss(q_pred, y)
+
+            if args.per:
+                element_loss = F.smooth_l1_loss(q_pred, y, reduction='none')
+                loss = (weights * element_loss).mean()
+                buffer.update_priorities(tree_idx, (q_pred - y).detach().abs().cpu().numpy())
+            else:
+                loss = F.smooth_l1_loss(q_pred, y)
+
             optim.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(online.parameters(), 10.0)
             optim.step()
@@ -251,6 +267,12 @@ def parse():
                    help="n-step return horizon (1 = standard 1-step TD)")
     p.add_argument("--double", action="store_true", default=False,
                    help="use double-DQN target for the dqn algo")
+    p.add_argument("--per", action="store_true", default=False,
+                   help="use Prioritized Experience Replay (Schaul et al. 2016)")
+    p.add_argument("--per-alpha", type=float, default=0.6,
+                   help="PER priority exponent (0=uniform, 1=full priority)")
+    p.add_argument("--per-beta", type=float, default=0.4,
+                   help="PER IS weight exponent start value (anneals to 1.0)")
     p.add_argument("--total-steps", type=int, default=50_000_000)
     p.add_argument("--buffer-capacity", type=int, default=1_000_000)
     p.add_argument("--batch-size", type=int, default=32)

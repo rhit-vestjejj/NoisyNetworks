@@ -7,3 +7,4 @@ matplotlib>=3.8
 gymnasium[atari]>=1.0
 autorom[accept-rom-license]>=0.6
 opencv-python-headless>=4.8
+minigrid>=2.3

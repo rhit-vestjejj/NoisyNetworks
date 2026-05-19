@@ -69,7 +69,7 @@ run() {
     echo "==> done: $name"
 }
 
-# ---- 5. the 4 jobs -------------------------------------------------------
+# ---- 5. the 6 jobs -------------------------------------------------------
 
 # --- DQN (standard 1-step TD) ---
 run asterix_base_noisy
@@ -78,6 +78,10 @@ run asterix_base_baseline  --no-noisy
 # --- DDQN (double DQN target) ---
 run asterix_ddqn_noisy     --double
 run asterix_ddqn_baseline  --no-noisy --double
+
+# --- DQN + PER (Prioritized Experience Replay) ---
+run asterix_per_noisy      --per
+run asterix_per_baseline   --no-noisy --per
 
 echo
 echo "==> All jobs finished. Generate plots with:"

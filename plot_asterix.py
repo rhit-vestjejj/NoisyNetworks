@@ -21,11 +21,13 @@ import matplotlib.pyplot as plt
 RUNS = {
     "dqn":  ("runs/asterix_base_noisy",  "runs/asterix_base_baseline"),
     "ddqn": ("runs/asterix_ddqn_noisy",  "runs/asterix_ddqn_baseline"),
+    "per":  ("runs/asterix_per_noisy",   "runs/asterix_per_baseline"),
 }
 
 LABELS = {
     "dqn":  "DQN",
     "ddqn": "Double DQN",
+    "per":  "DQN + PER",
 }
 
 NOISY_COLOR    = "steelblue"
@@ -34,6 +36,7 @@ BASELINE_COLOR = "tomato"
 IMPL_COLORS = {
     "dqn":  "#2196F3",
     "ddqn": "#FF9800",
+    "per":  "#9C27B0",
 }
 
 OUT_DIR = "runs/plots"
