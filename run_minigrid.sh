@@ -59,12 +59,12 @@ run() {
 }
 
 # ---- 4. jobs -------------------------------------------------------------
-# run doorkey_noisy
+run doorkey_noisy
 # run doorkey_baseline       --no-noisy
-run doorkey_ddqn_noisy     --double
-run doorkey_ddqn_baseline  --double --no-noisy
-run doorkey_per_noisy      --per
-run doorkey_per_baseline   --per --no-noisy
+# run doorkey_ddqn_noisy     --double
+# run doorkey_ddqn_baseline  --double --no-noisy
+# run doorkey_per_noisy      --per
+# run doorkey_per_baseline   --per --no-noisy
 
 echo
 echo "==> All jobs finished. Generate plots with:"

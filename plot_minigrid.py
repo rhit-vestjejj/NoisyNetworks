@@ -23,9 +23,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 RUNS = {
-    "dqn":  ("runs/minigrid_base_noisy",  "runs/minigrid_base_baseline"),
-    "ddqn": ("runs/minigrid_ddqn_noisy",  "runs/minigrid_ddqn_baseline"),
-    "per":  ("runs/minigrid_per_noisy",   "runs/minigrid_per_baseline"),
+    "dqn":  ("runs/doorkey_noisy",  "runs/doorkey_baseline"),
+    "ddqn": ("runs/doorkey_ddqn_noisy",  "runs/doorkey_ddqn_baseline"),
+    "per":  ("runs/doorkey_per_noisy",   "runs/doorkey_per_baseline"),
 }
 
 LABELS = {
