@@ -119,8 +119,29 @@ for impl, data in loaded.items():
     _plot(ax, steps, rewards, f"NoisyNet-{LABELS[impl]}", IMPL_COLORS[impl])
 ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
 ax.set_title("NoisyNet-DQN vs NoisyNet-DDQN — Asterix")
+ax.set_xlim(left=0, right=0.50e7)
 ax.legend()
 save(fig, os.path.join(OUT_DIR, "summary_noisy.png"))
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for impl, data in loaded.items():
+    steps, rewards = data["noisy"]
+    _plot(ax, steps, rewards, f"NoisyNet-{LABELS[impl]}", IMPL_COLORS[impl])
+ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
+ax.set_title("NoisyNet-DQN vs NoisyNet-DDQN — Asterix (zoomed)")
+ax.set_xlim(0.20e7, 0.50e7)
+ax.legend()
+save(fig, os.path.join(OUT_DIR, "summary_noisy_2.png"))
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for impl, data in loaded.items():
+    steps, rewards = data["noisy"]
+    _plot(ax, steps, rewards, f"NoisyNet-{LABELS[impl]}", IMPL_COLORS[impl])
+ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
+ax.set_title("NoisyNet-DQN vs NoisyNet-DDQN — Asterix")
+ax.set_xlim(left=0, right=1.5e7)
+ax.legend()
+save(fig, os.path.join(OUT_DIR, "summary_noisy_og.png"))
 
 # 5. Summary: all baseline variants
 fig, ax = plt.subplots(figsize=(9, 5))
@@ -129,7 +150,28 @@ for impl, data in loaded.items():
     _plot(ax, steps, rewards, f"Vanilla {LABELS[impl]}", IMPL_COLORS[impl])
 ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
 ax.set_title("Vanilla DQN vs Vanilla DDQN — Asterix")
+ax.set_xlim(left=0, right=0.50e7)
 ax.legend()
 save(fig, os.path.join(OUT_DIR, "summary_baseline.png"))
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for impl, data in loaded.items():
+    steps, rewards = data["base"]
+    _plot(ax, steps, rewards, f"Vanilla {LABELS[impl]}", IMPL_COLORS[impl])
+ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
+ax.set_title("Vanilla DQN vs Vanilla DDQN — Asterix (zoomed)")
+ax.set_xlim(0.20e7, 0.50e7)
+ax.legend()
+save(fig, os.path.join(OUT_DIR, "summary_baseline_2.png"))
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for impl, data in loaded.items():
+    steps, rewards = data["base"]
+    _plot(ax, steps, rewards, f"Vanilla {LABELS[impl]}", IMPL_COLORS[impl])
+ax.set_xlabel("env step"); ax.set_ylabel("mean reward (last 100 eps)")
+ax.set_title("Vanilla DQN vs Vanilla DDQN — Asterix")
+ax.set_xlim(left=0, right=1.5e7)
+ax.legend()
+save(fig, os.path.join(OUT_DIR, "summary_baseline_og.png"))
 
 print(f"\nAll plots saved to {OUT_DIR}/")

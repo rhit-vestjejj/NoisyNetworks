@@ -185,6 +185,54 @@ class PrioritizedReplay:
                 self.max_priority = float(p)
 
 
+# ---------- n-step buffer ----------
+
+class NStepBuffer:
+    """Accumulates transitions and emits n-step returns.
+
+    The stored (s, a, G, s_n, done) transition uses:
+      G = r_t + γ*r_{t+1} + ... + γ^{k-1}*r_{t+k-1}
+    where k = n, or k < n if the episode ends early (done=True, s_n = terminal state).
+    The caller should use γ^n as the bootstrap discount so that the (1-done) mask
+    correctly zeroes the bootstrap term for early-terminal transitions.
+    """
+
+    def __init__(self, n, gamma):
+        self.n = n
+        self.gamma = gamma
+        self.buf = deque()
+
+    def push(self, s, a, r, s_next, done):
+        self.buf.append((s, a, r, s_next, done))
+
+    def can_pop(self):
+        return len(self.buf) >= self.n
+
+    def pop(self):
+        t = self._make()
+        self.buf.popleft()
+        return t
+
+    def flush(self):
+        out = []
+        while self.buf:
+            out.append(self.pop())
+        return out
+
+    def _make(self):
+        s0, a0 = self.buf[0][0], self.buf[0][1]
+        G = 0.0
+        s_n, done_n = self.buf[-1][3], self.buf[-1][4]
+        for i, (_, _, r, sn, d) in enumerate(self.buf):
+            if i == self.n:
+                break
+            G += (self.gamma ** i) * r
+            s_n, done_n = sn, d
+            if d:
+                break
+        return s0, a0, G, s_n, done_n
+
+
 # ---------- training ----------
 
 def _eps(step, args):
@@ -211,6 +259,8 @@ def train(args):
         buffer = PrioritizedReplay(args.buffer_capacity, obs_shape, alpha=args.per_alpha)
     else:
         buffer = SimpleReplay(args.buffer_capacity, obs_shape)
+    nstep = NStepBuffer(args.n_step, args.gamma)
+    gamma_n = args.gamma ** args.n_step
 
     episode_rewards = deque(maxlen=100)
     log = {"step": [], "mean_reward": [], "sigma": [], "epsilon": []}
@@ -233,11 +283,15 @@ def train(args):
 
         next_obs, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
-        buffer.push(obs, action, reward, next_obs, float(terminated))
+        nstep.push(obs, action, reward, next_obs, float(terminated))
+        while nstep.can_pop():
+            buffer.push(*nstep.pop())
         obs = next_obs
         ep_reward += reward
 
         if done:
+            for t in nstep.flush():
+                buffer.push(*t)
             episode_rewards.append(ep_reward)
             obs, _ = env.reset()
             ep_reward = 0.0
@@ -258,7 +312,7 @@ def train(args):
                 else:
                     target.reset_noise()
                     q_next = target(s_next).max(dim=1).values
-                y = r + args.gamma * (1.0 - term) * q_next
+                y = r + gamma_n * (1.0 - term) * q_next
 
             online.reset_noise()
             q_pred = online(s).gather(1, a.unsqueeze(1)).squeeze(1)
@@ -345,6 +399,8 @@ def parse():
                    help="use Prioritized Experience Replay")
     p.add_argument("--per-alpha",        type=float, default=0.6)
     p.add_argument("--per-beta",         type=float, default=0.4)
+    p.add_argument("--n-step",           type=int,   default=1,
+                   help="n-step return length (1 = standard 1-step TD)")
     p.add_argument("--log-every",        type=int,   default=5_000)
     p.add_argument("--save-every",       type=int,   default=50_000)
     p.add_argument("--seed",             type=int,   default=0)
