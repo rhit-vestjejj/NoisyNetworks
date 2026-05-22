@@ -17,6 +17,7 @@ Default hyperparameters target a CPU run finishing in a few hours:
 """
 
 import argparse
+import json
 import os
 import random
 import time
@@ -102,7 +103,8 @@ class SimpleReplay:
     def __len__(self):
         return self.capacity if self.full else self.idx
 
-    def push(self, s, a, r, s_next, done):
+    def push(self, s, a, r, s_next, done, env_step=0, sigma=0.0):
+        del env_step, sigma  # accepted for signature parity with PrioritizedReplay
         self.obs[self.idx]       = s
         self.next_obs[self.idx]  = s_next
         self.actions[self.idx]   = a
@@ -139,17 +141,28 @@ class PrioritizedReplay:
         self.actions   = np.zeros(capacity, dtype=np.int64)
         self.rewards   = np.zeros(capacity, dtype=np.float32)
         self.terminals = np.zeros(capacity, dtype=np.float32)
+        # Diagnostics: how many times each slot was sampled, the env step at
+        # which the transition was inserted, and the network's exploration-noise
+        # level at insertion. The σ tag lets us answer the UPER-motivated
+        # question: does PER systematically over-sample high-σ transitions?
+        self.sample_counts    = np.zeros(capacity, dtype=np.int64)
+        self.insert_step      = np.zeros(capacity, dtype=np.int64)
+        self.sigma_at_insert  = np.zeros(capacity, dtype=np.float32)
 
     def __len__(self):
         return self.tree.n_entries
 
-    def push(self, s, a, r, s_next, terminal):
+    def push(self, s, a, r, s_next, terminal, env_step=0, sigma=0.0):
         data_idx = self.tree.write_idx
         self.obs[data_idx]       = s
         self.next_obs[data_idx]  = s_next
         self.actions[data_idx]   = a
         self.rewards[data_idx]   = r
         self.terminals[data_idx] = terminal
+        # Reset diagnostics for the slot being overwritten.
+        self.sample_counts[data_idx]   = 0
+        self.insert_step[data_idx]     = env_step
+        self.sigma_at_insert[data_idx] = sigma
         self.tree.add(self.max_priority)
 
     def sample(self, batch_size, device, beta):
@@ -164,6 +177,7 @@ class PrioritizedReplay:
             tree_indices[i] = ti
             data_indices[i] = di
             priorities[i]   = p
+        np.add.at(self.sample_counts, data_indices, 1)
         probs   = priorities / total
         weights = (len(self) * probs) ** (-beta)
         weights = (weights / weights.max()).astype(np.float32)
@@ -262,8 +276,23 @@ def train(args):
     nstep = NStepBuffer(args.n_step, args.gamma)
     gamma_n = args.gamma ** args.n_step
 
+    # Names of NoisyLinear layers in declaration order — used for per-layer σ.
+    noisy_layer_names = [name for name, m in online.named_modules()
+                         if isinstance(m, NoisyLinear)]
+
+    # Save args alongside log.npz so analysis scripts can group runs reliably.
+    with open(os.path.join(args.out_dir, "args.json"), "w") as f:
+        json.dump(vars(args), f, indent=2)
+
     episode_rewards = deque(maxlen=100)
-    log = {"step": [], "mean_reward": [], "sigma": [], "epsilon": []}
+    log = {
+        "step": [], "mean_reward": [], "sigma": [], "epsilon": [],
+        # Per-layer σ trajectory (list of dicts at each log step).
+        "sigma_per_layer": [],
+        # TD-error stats over the most recent batch at each log step.
+        "td_mean": [], "td_max": [], "td_std": [],
+    }
+    last_td = None  # cached for log step
 
     obs, _ = env.reset(seed=args.seed)
     ep_reward = 0.0
@@ -281,17 +310,28 @@ def train(args):
                 with torch.no_grad():
                     action = int(online(torch.as_tensor(obs, device=device).unsqueeze(0)).argmax(1).item())
 
+        # Tag transitions inserted this step with the current exploration-noise
+        # level so we can later ask whether PER over-samples high-σ transitions.
+        if args.noisy:
+            with torch.no_grad():
+                cur_sigma = float(np.mean([
+                    m.weight_sigma.abs().mean().item()
+                    for m in online.modules() if isinstance(m, NoisyLinear)
+                ]))
+        else:
+            cur_sigma = 0.0
+
         next_obs, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
         nstep.push(obs, action, reward, next_obs, float(terminated))
         while nstep.can_pop():
-            buffer.push(*nstep.pop())
+            buffer.push(*nstep.pop(), env_step=step, sigma=cur_sigma)
         obs = next_obs
         ep_reward += reward
 
         if done:
             for t in nstep.flush():
-                buffer.push(*t)
+                buffer.push(*t, env_step=step, sigma=cur_sigma)
             episode_rewards.append(ep_reward)
             obs, _ = env.reset()
             ep_reward = 0.0
@@ -317,10 +357,13 @@ def train(args):
             online.reset_noise()
             q_pred = online(s).gather(1, a.unsqueeze(1)).squeeze(1)
 
+            td = (q_pred - y).detach()
+            last_td = td.abs().cpu().numpy()
+
             if args.per:
                 element_loss = F.smooth_l1_loss(q_pred, y, reduction='none')
                 loss = (weights * element_loss).mean()
-                buffer.update_priorities(tree_idx, (q_pred - y).detach().abs().cpu().numpy())
+                buffer.update_priorities(tree_idx, last_td)
             else:
                 loss = F.smooth_l1_loss(q_pred, y)
 
@@ -342,17 +385,48 @@ def train(args):
             log["mean_reward"].append(mean_r)
             log["sigma"].append(mean_sigma)
             log["epsilon"].append(eps)
+            log["sigma_per_layer"].append(sigmas)
+            if last_td is not None:
+                log["td_mean"].append(float(last_td.mean()))
+                log["td_max"].append(float(last_td.max()))
+                log["td_std"].append(float(last_td.std()))
+            else:
+                log["td_mean"].append(0.0)
+                log["td_max"].append(0.0)
+                log["td_std"].append(0.0)
             extra = f"sigma {mean_sigma:.4f}" if args.noisy else f"eps {eps:.3f}"
             print(f"step {step:8d} | reward(last100) {mean_r:7.4f} | {extra} | elapsed {time.time()-t0:6.1f}s")
 
         if step % args.save_every == 0:
             torch.save(online.state_dict(), os.path.join(args.out_dir, "model.pt"))
-            np.savez(os.path.join(args.out_dir, "log.npz"), **log)
+            _save_log(args.out_dir, log, buffer, noisy_layer_names)
             _save_plots(args.out_dir, log, args.noisy)
 
     env.close()
-    np.savez(os.path.join(args.out_dir, "log.npz"), **log)
+    _save_log(args.out_dir, log, buffer, noisy_layer_names)
     _save_plots(args.out_dir, log, args.noisy)
+
+
+def _save_log(out_dir, log, buffer, noisy_layer_names):
+    """Write log.npz with diagnostics. PER sample-count snapshots are written
+    to a separate file so they don't bloat the main log."""
+    payload = {}
+    for k, v in log.items():
+        if k == "sigma_per_layer":
+            # Empty list (no noisy layers) → (n_log_steps, 0) float array.
+            payload[k] = (np.array(v, dtype=np.float32) if v and v[0]
+                          else np.zeros((len(v), 0), dtype=np.float32))
+        else:
+            payload[k] = np.asarray(v)
+    payload["noisy_layer_names"] = np.asarray(noisy_layer_names)
+    np.savez(os.path.join(out_dir, "log.npz"), **payload)
+    if isinstance(buffer, PrioritizedReplay):
+        np.savez(
+            os.path.join(out_dir, "per_diag.npz"),
+            sample_counts=buffer.sample_counts,
+            insert_step=buffer.insert_step,
+            sigma_at_insert=buffer.sigma_at_insert,
+        )
 
 
 def _save_plots(out_dir, log, noisy):
