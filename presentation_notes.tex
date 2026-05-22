@@ -1,0 +1,351 @@
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{titlesec}
+
+\title{\textbf{NoisyNetworks: Exploration via Learned Noise}\\
+\large Asterix Atari Environment --- DQN, Double DQN, and PER}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Motivation}
+% ============================================================
+
+A core challenge in reinforcement learning is the \textbf{exploration-exploitation tradeoff}.
+The agent must try new actions to discover better policies, but also exploit what it already knows.
+
+The dominant approach in deep RL --- $\varepsilon$-greedy --- is simple: with probability
+$\varepsilon$ take a random action, otherwise act greedily.
+Its problems:
+\begin{itemize}
+  \item Exploration is \emph{undirected}: random actions ignore the current knowledge of the value function.
+  \item $\varepsilon$ must be annealed by hand; the schedule is a hyperparameter that interacts with everything else.
+  \item All actions are explored equally regardless of state, wasting samples in well-understood regions.
+\end{itemize}
+
+\textbf{NoisyNets} (Fortunato et al., 2017) replace the fixed $\varepsilon$-greedy policy with
+\emph{learned, state-dependent noise} injected directly into the network weights,
+letting the network itself decide how much to explore in each situation.
+
+% ============================================================
+\section{Background: DQN}
+% ============================================================
+
+\subsection{Q-Learning and the Bellman Equation}
+
+Q-learning seeks to approximate the optimal action-value function:
+\begin{equation}
+  Q^*(s, a) = \mathbb{E}\!\left[r + \gamma \max_{a'} Q^*(s', a') \;\Big|\; s, a\right]
+\end{equation}
+
+DQN (Mnih et al., 2015) parameterises $Q(s,a;\theta)$ with a deep neural network and
+minimises the temporal-difference (TD) loss:
+\begin{equation}
+  \mathcal{L}(\theta) =
+  \mathbb{E}_{(s,a,r,s') \sim \mathcal{D}}\!\left[
+    \Bigl(
+      \underbrace{r + \gamma \max_{a'} Q(s', a';\,\theta^-)}_{\text{TD target}}
+      - Q(s,a;\,\theta)
+    \Bigr)^2
+  \right]
+\end{equation}
+
+where $\theta^-$ are the \textbf{target network} parameters (periodically copied from $\theta$)
+and $\mathcal{D}$ is the \textbf{replay buffer}.
+
+\subsection{Key Stabilisation Tricks}
+\begin{itemize}
+  \item \textbf{Experience replay}: store $(s,a,r,s')$ tuples; sample mini-batches uniformly.
+        Breaks temporal correlations between consecutive updates.
+  \item \textbf{Target network}: a frozen copy of $Q$ used only for computing TD targets.
+        Prevents the moving-target problem.
+\end{itemize}
+
+% ============================================================
+\section{Background: Double DQN}
+% ============================================================
+
+\subsection{The Overestimation Problem}
+
+Standard DQN uses the \emph{same} network to both \emph{select} and \emph{evaluate} the
+greedy action in the target:
+\[
+  y^{\text{DQN}} = r + \gamma \max_{a'} Q(s', a';\,\theta^-)
+\]
+Because $\max$ is applied to noisy estimates, this systematically \emph{overestimates}
+$Q^*$. The agent pursues inflated Q-values rather than truly better states.
+
+\subsection{Double DQN Correction}
+
+Double DQN (van Hasselt et al., 2015) decouples action \emph{selection} (online network)
+from action \emph{evaluation} (target network):
+\begin{equation}
+  y^{\text{DDQN}} = r + \gamma\, Q\!\left(s',\; \arg\max_{a'} Q(s',a';\,\theta);\; \theta^-\right)
+\end{equation}
+
+The online network picks the best action; the target network scores it.
+Overestimation is reduced because both networks must agree for a value to be inflated.
+
+% ============================================================
+\section{Background: Prioritised Experience Replay (PER)}
+% ============================================================
+
+Uniform replay wastes capacity: the agent replays ``easy'' transitions (low TD error)
+as often as ``hard'' ones. PER (Schaul et al., 2015) samples proportional to TD error.
+
+\subsection{Priority and Sampling Probability}
+
+The priority of transition $i$ is:
+\begin{equation}
+  p_i = |\delta_i| + \epsilon_{\text{PER}}
+\end{equation}
+where $\delta_i$ is the absolute TD error and $\epsilon_{\text{PER}}$ is a small constant
+preventing zero probability.
+
+The sampling probability is:
+\begin{equation}
+  P(i) = \frac{p_i^\alpha}{\sum_k p_k^\alpha}
+\end{equation}
+
+$\alpha \in [0,1]$ controls how strongly priorities are used ($\alpha = 0$ recovers uniform).
+
+\subsection{Importance Sampling Correction}
+
+Prioritised sampling introduces bias because the distribution no longer matches the
+on-policy distribution. Importance sampling (IS) weights correct this:
+\begin{equation}
+  w_i = \left(\frac{1}{N \cdot P(i)}\right)^{\!\beta}
+  \Big/ \max_j w_j
+\end{equation}
+
+$\beta$ is annealed from a small value to 1 over training. The TD update becomes:
+\begin{equation}
+  \mathcal{L}(\theta) = \mathbb{E}\!\left[w_i \cdot \delta_i^2\right]
+\end{equation}
+
+% ============================================================
+\section{Background: NoisyNets}
+% ============================================================
+
+\subsection{Noisy Linear Layers}
+
+A standard linear layer computes $y = Wx + b$.
+A \textbf{noisy linear layer} replaces each weight and bias with a learned mean plus
+learned-variance noise:
+\begin{equation}
+  y = \bigl(\mu^w + \sigma^w \odot \varepsilon^w\bigr)\,x
+    + \bigl(\mu^b + \sigma^b \odot \varepsilon^b\bigr)
+\end{equation}
+
+where $\varepsilon^w, \varepsilon^b$ are random noise tensors sampled at each forward pass,
+and $\mu, \sigma$ are trainable parameters.
+
+\subsection{Factorised Gaussian Noise}
+
+To reduce the number of independent noise samples (expensive for large layers),
+\textbf{factorised} noise uses two independent vectors $\varepsilon_i^p$ (input) and
+$\varepsilon_j^q$ (output) and constructs the weight noise as:
+\begin{equation}
+  \varepsilon^w_{ij} = f(\varepsilon_i^p)\, f(\varepsilon_j^q),
+  \qquad
+  f(x) = \operatorname{sgn}(x)\sqrt{|x|}
+\end{equation}
+
+This reduces the noise parameters from $O(pq)$ to $O(p + q)$.
+
+\subsection{Parameter Initialisation}
+
+\[
+  \mu^w_{ij} \sim \mathcal{U}\!\left[-\tfrac{1}{\sqrt{p}},\, \tfrac{1}{\sqrt{p}}\right],
+  \qquad
+  \sigma^w_{ij} = \frac{\sigma_0}{\sqrt{p}}
+\]
+where $p$ is the number of inputs and $\sigma_0 = 0.5$ by default.
+
+\subsection{Why This Beats $\varepsilon$-Greedy}
+
+\begin{itemize}
+  \item Noise is \textbf{state-dependent}: the same weights are active across a full episode,
+        so exploration is \emph{consistent} (the agent commits to exploratory behaviour rather
+        than flipping randomly at every step).
+  \item The network \textbf{learns to reduce noise} when it is confident and maintain noise
+        when it is uncertain, via the gradient of the loss on $\sigma$.
+  \item No schedule to tune: $\varepsilon$ is eliminated entirely.
+\end{itemize}
+
+% ============================================================
+\section{Experimental Setup}
+% ============================================================
+
+\begin{itemize}
+  \item \textbf{Environment}: Asterix (Atari 2600 via ALE), frame-stacked, grayscale.
+  \item \textbf{Variants tested}: Vanilla DQN, Vanilla DDQN, Vanilla DQN+PER,
+        NoisyNet-DQN, NoisyNet-DDQN, NoisyNet-DQN+PER.
+  \item \textbf{Training}: 20M environment steps per variant.
+  \item \textbf{Metric}: mean episodic reward over the last 100 episodes.
+  \item \textbf{Network}: convolutional backbone (3 conv layers) $\rightarrow$ 2 noisy
+        (or standard) linear layers.
+\end{itemize}
+
+% ============================================================
+\section{Results and Analysis}
+% ============================================================
+
+\subsection{NoisyNet-DQN vs.\ Vanilla DQN}
+
+\textbf{Finding}: The two curves are nearly identical for the entire 20M step run.
+Both converge to $\approx 27$--$29$ mean reward.
+
+\textbf{Why}: In a dense-reward environment like Asterix, $\varepsilon$-greedy with a
+simple linear annealing schedule already provides sufficient coverage of the state space.
+The learned noise in NoisyNet essentially replicates what $\varepsilon$-greedy was already
+doing --- it has no underexplored regions to find that the baseline missed.
+NoisyNets shine most in environments where exploration \emph{direction} matters;
+here, random actions are good enough.
+
+\subsection{NoisyNet-DDQN vs.\ Vanilla DDQN}
+
+\textbf{Finding}: NoisyNet-DDQN clearly outperforms Vanilla DDQN after $\sim$5M steps,
+converging to $\approx 30$ vs.\ $\approx 27$.
+
+\textbf{Why}: DDQN reduces Q-value overestimation. With more accurate value estimates,
+the noisy exploration signal is \emph{meaningful} --- the network explores regions where
+it is genuinely uncertain rather than chasing inflated Q-values.
+In Vanilla DQN, overestimation corrupts the signal that NoisyNet would use to guide
+exploration; once DDQN corrects that bias, NoisyNet's learned uncertainty maps cleanly
+onto actual policy improvements.
+
+\subsection{Vanilla DDQN vs.\ Vanilla DQN (Baseline)}
+
+\textbf{Finding}: Vanilla DDQN does \emph{not} clearly outperform Vanilla DQN.
+Both converge to $\approx 25$--$28$.
+
+\textbf{Why}: DDQN's correction for overestimation matters most in environments where
+inflated Q-values cause the agent to commit to \emph{systematically wrong} actions.
+Asterix has a dense, consistent reward structure: even overestimated Q-values tend to point
+toward genuinely good actions (collecting items is reliably rewarded).
+The overestimation bias exists but does not distort the \emph{ranking} of good vs.\ bad
+actions enough to degrade the final policy.
+In harder, sparser environments (e.g., MuJoCo locomotion, sparse navigation) DDQN's
+advantage would likely be more pronounced.
+
+\subsection{NoisyNet-PER vs.\ Vanilla PER}
+
+\textbf{Finding}: NoisyNet-PER outperforms Vanilla PER by a consistent margin ($\approx 28$--$29$
+vs.\ $\approx 24$--$25$).
+
+\textbf{Why}: PER and NoisyNets are \emph{synergistic}:
+\begin{enumerate}
+  \item NoisyNet exploration generates diverse, surprising transitions --- these have
+        high TD errors and get prioritised by PER.
+  \item PER then replays these informative transitions more often, amplifying the
+        learning signal from NoisyNet's targeted exploration.
+  \item The combination creates a positive feedback loop: better exploration $\rightarrow$
+        richer replay buffer $\rightarrow$ more efficient learning.
+\end{enumerate}
+Without NoisyNet, Vanilla PER's replay buffer eventually fills with stale transitions
+whose TD errors have already been driven down. There is no mechanism to keep generating
+fresh high-priority experience.
+
+\subsection{Vanilla PER: Fast Start, Early Plateau}
+
+\textbf{Finding}: Vanilla PER learns the fastest in the 0--5M step window but plateaus
+sooner and slightly lower than Vanilla DQN in the long run.
+
+\textbf{Why}: PER's prioritised sampling is extremely efficient early --- high-error
+transitions are valuable and get heavily replayed. However, as the agent improves,
+TD errors shrink uniformly and the ``hard'' transitions become indistinguishable from easy ones.
+The replay buffer ages: frequently replayed transitions become stale as the network
+moves away from the policy that generated them.
+Without a mechanism (like NoisyNet) to continuously generate new high-priority experiences,
+PER runs out of steam and ε-greedy's uniform exploration keeps feeding DQN with fresher data.
+
+\subsection{Summary Table}
+
+\begin{center}
+\begin{tabular}{lcc}
+  \toprule
+  Variant & Approx.\ Final Reward & Key Observation \\
+  \midrule
+  Vanilla DQN         & 27--29 & Strong baseline \\
+  NoisyNet-DQN        & 27--29 & No gain over vanilla \\
+  Vanilla DDQN        & 25--28 & No clear gain over DQN \\
+  NoisyNet-DDQN       & $\approx$ 30 & Best late-game noisy variant \\
+  Vanilla PER         & 24--25 & Fast early, plateaus low \\
+  NoisyNet-PER        & 28--29 & Fast + sustained improvement \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
+\section{Key Takeaways}
+% ============================================================
+
+\begin{enumerate}
+  \item \textbf{NoisyNets are not universally better than $\varepsilon$-greedy.}
+        In dense-reward environments with simple action spaces, the directed exploration
+        provides no measurable benefit over random perturbation.
+
+  \item \textbf{NoisyNets require accurate value estimates to be effective.}
+        Paired with DDQN (lower overestimation), NoisyNet's uncertainty signal maps to
+        real policy gaps. Paired with standard DQN, the overestimated Q-landscape
+        dilutes the benefit.
+
+  \item \textbf{PER and NoisyNets are complementary.}
+        PER makes replay efficient; NoisyNet keeps the replay buffer populated with
+        fresh, high-priority transitions. Neither alone achieves what both together do.
+
+  \item \textbf{Algorithmic improvements compound.}
+        The biggest gains come from stacking orthogonal techniques (DDQN addresses
+        overestimation; PER addresses sample efficiency; NoisyNet addresses exploration).
+
+  \item \textbf{Environment matters.}
+        Asterix is relatively forgiving (dense rewards, clear feedback). Results may
+        differ significantly on sparse-reward or procedurally generated environments
+        (e.g., MiniGrid) where directed exploration is the binding constraint.
+\end{enumerate}
+
+% ============================================================
+\section{Equations Reference (Quick Copy)}
+% ============================================================
+
+\[
+  \text{DQN target:} \quad
+  y^{\text{DQN}} = r + \gamma \max_{a'} Q(s', a';\,\theta^-)
+\]
+
+\[
+  \text{DDQN target:} \quad
+  y^{\text{DDQN}} = r + \gamma\, Q\!\left(s',\; \arg\max_{a'} Q(s',a';\,\theta);\; \theta^-\right)
+\]
+
+\[
+  \text{PER priority:} \quad p_i = |\delta_i| + \varepsilon, \quad
+  P(i) = \frac{p_i^\alpha}{\sum_k p_k^\alpha}
+\]
+
+\[
+  \text{IS weight:} \quad w_i = \left(\frac{1}{N \cdot P(i)}\right)^{\!\beta} \Big/ \max_j w_j
+\]
+
+\[
+  \text{Noisy layer:} \quad
+  y = (\mu^w + \sigma^w \odot \varepsilon^w)\,x + (\mu^b + \sigma^b \odot \varepsilon^b)
+\]
+
+\[
+  \text{Factorised noise:} \quad
+  \varepsilon^w_{ij} = f(\varepsilon_i)\,f(\varepsilon_j), \quad f(x) = \operatorname{sgn}(x)\sqrt{|x|}
+\]
+
+\end{document}

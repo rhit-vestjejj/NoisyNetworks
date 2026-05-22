@@ -256,6 +256,7 @@ def _eps(step, args):
 
 def train(args):
     os.makedirs(args.out_dir, exist_ok=True)
+    torch.set_num_threads(1)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
